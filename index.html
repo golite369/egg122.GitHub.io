@@ -39,7 +39,7 @@ function playSound(sound){
   s.play()
 }
 
-window.addEventListener("click", () => {
+function unlockAudio(){
 
   bgm.volume = 0.4
   bgm.play().catch(()=>{})
@@ -50,7 +50,13 @@ window.addEventListener("click", () => {
   sfxHit.play().then(()=>{sfxHit.pause();sfxHit.currentTime=0}).catch(()=>{})
   sfxBoss.play().then(()=>{sfxBoss.pause();sfxBoss.currentTime=0}).catch(()=>{})
 
-}, { once:true })
+}
+
+// 鼠标点击触发
+window.addEventListener("click", unlockAudio, { once:true })
+
+// 任意键触发
+window.addEventListener("keydown", unlockAudio, { once:true })
 let W, H;
 function resize() {
   W = C.width = window.innerWidth;
