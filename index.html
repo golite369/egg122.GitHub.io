@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>鸡蛋鸭蛋恐龙蛋 — Eggs & Rogues</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0a;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block;width:100%;height:100%}
+#touchLeft{position:fixed;left:20px;bottom:20px;width:140px;height:140px;border-radius:50%;border:3px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);display:none;z-index:10}
+#touchLeft .stick{position:absolute;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.25);top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none}
+#touchAttack{position:fixed;right:30px;bottom:40px;width:90px;height:90px;border-radius:50%;border:3px solid #ff5757;background:rgba(255,87,87,.15);display:none;z-index:10;font-size:32px;color:#ff5757;line-height:84px;text-align:center;font-family:sans-serif;font-weight:900}
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<div id="touchLeft"><div class="stick" id="joyStick"></div></div>
+<div id="touchAttack" style="display:none"></div>
+<audio id="bgm" src="./bgm.mp3" loop></audio>
+<audio id="sfxSmash" src="./smash.mp3"></audio>
+<audio id="sfxBuff" src="./buff.mp3"></audio>
+<audio id="sfxHit" src="./hit.mp3"></audio>
+<audio id="sfxBoss" src="./boss.mp3"></audio>
+<script>
+/* ===== EGGS & ROGUES — 鸡蛋鸭蛋恐龙蛋 ===== */
+
+// ---------- CANVAS SETUP ----------
+const C = document.getElementById('gc');
+const X = C.getContext('2d');
+const bgm = document.getElementById("bgm")
+const sfxSmash = document.getElementById("sfxSmash")
+const sfxBuff = document.getElementById("sfxBuff")
+const sfxHit = document.getElementById("sfxHit")
+const sfxBoss = document.getElementById("sfxBoss")
+function playSound(sound){
+  const s = sound.cloneNode()
+  s.volume = 0.6
+  s.play()
+}
+
+window.addEventListener("click", () => {
+
+  bgm.volume = 0.4
+  bgm.play().catch(()=>{})
+
+  // 解锁所有音效
+  sfxSmash.play().then(()=>{sfxSmash.pause();sfxSmash.currentTime=0}).catch(()=>{})
+  sfxBuff.play().then(()=>{sfxBuff.pause();sfxBuff.currentTime=0}).catch(()=>{})
+  sfxHit.play().then(()=>{sfxHit.pause();sfxHit.currentTime=0}).catch(()=>{})
+  sfxBoss.play().then(()=>{sfxBoss.pause();sfxBoss.currentTime=0}).catch(()=>{})
+
+}, { once:true })
+let W, H;
+function resize() {
+  W = C.width = window.innerWidth;
+  H = C.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ---------- CONSTANTS / PALETTE ----------
+const MEMPHIS = {
+  bg: '#0a0a0a',
+  pink: '#FF6B9D',
+  yellow: '#FFE66D',
+  cyan: '#4ECDC4',
+  orange: '#FF8C42',
+  green: '#51E898',
+  red: '#FF5757',
+  blue: '#5B7FFF',
+  purple: '#C77DFF',
+  white: '#F5F5F5',
+};
+const PI2 = Math.PI * 2;
+
+// ---------- GAME STATE ----------
+let state = 'intro'; // intro | playing | ending
+let introTimer = 0;
+let gameTime = 0;
+let shakeX = 0, shakeY = 0, shakeDur = 0;
+let stats = { kills: 0, hits: 0, buffs: 0, survived: 0, bossKilled: false, lastActionTime: 0 };
+
+// ---------- INPUT ----------
+const keys = {};
+let touchMoveVec = { x: 0, y: 0 };
+let isMobile = false;
+
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// Detect mobile
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+  isMobile = true;
+  document.getElementById('touchLeft').style.display = 'block';
+}
+
+// Touch joystick
+const joyPad = document.getElementById('touchLeft');
+const joyStick = document.getElementById('joyStick');
+let joyActive = false, joyId = null, joyCenter = { x: 0, y: 0 };
+
+joyPad.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  joyActive = true; joyId = t.identifier;
+  const r = joyPad.getBoundingClientRect();
+  joyCenter = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+});
+window.addEventListener('touchmove', e => {
+  if (!joyActive) return;
+  for (let t of e.changedTouches) {
+    if (t.identifier === joyId) {
+      let dx = t.clientX - joyCenter.x, dy = t.clientY - joyCenter.y;
+      let dist = Math.sqrt(dx * dx + dy * dy);
+      let maxR = 40;
+      if (dist > maxR) { dx = dx / dist * maxR; dy = dy / dist * maxR; dist = maxR; }
+      joyStick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      touchMoveVec.x = dx / maxR;
+      touchMoveVec.y = dy / maxR;
+    }
+  }
+});
+window.addEventListener('touchend', e => {
+  for (let t of e.changedTouches) {
+    if (t.identifier === joyId) {
+      joyActive = false; joyId = null;
+      joyStick.style.transform = 'translate(-50%,-50%)';
+      touchMoveVec.x = 0; touchMoveVec.y = 0;
+    }
+  }
+});
+
+document.getElementById('touchAttack').addEventListener('touchstart', e => {
+  e.preventDefault();
+  attackPressed = true;
+});
+
+// ---------- PARTICLES ----------
+let particles = [];
+function spawnParticles(x, y, color, count, speed) {
+  for (let i = 0; i < count; i++) {
+    let angle = Math.random() * PI2;
+    let spd = speed * (0.5 + Math.random());
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * spd,
+      vy: Math.sin(angle) * spd,
+      life: 1,
+      decay: 0.015 + Math.random() * 0.02,
+      size: 2 + Math.random() * 5,
+      color,
+      shape: Math.random() < 0.3 ? 'tri' : (Math.random() < 0.5 ? 'rect' : 'circle'),
+      rot: Math.random() * PI2,
+      rotSpd: (Math.random() - 0.5) * 0.2,
+    });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    let p = particles[i];
+    p.x += p.vx * dt * 60;
+    p.y += p.vy * dt * 60;
+    p.vy += 0.05 * dt * 60;
+    p.life -= p.decay * dt * 60;
+    p.rot += p.rotSpd * dt * 60;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+function drawParticles() {
+  for (let p of particles) {
+    X.save();
+    X.globalAlpha = p.life;
+    X.translate(p.x, p.y);
+    X.rotate(p.rot);
+    X.fillStyle = p.color;
+    let s = p.size * p.life;
+    if (p.shape === 'circle') {
+      X.beginPath(); X.arc(0, 0, s, 0, PI2); X.fill();
+    } else if (p.shape === 'rect') {
+      X.fillRect(-s, -s, s * 2, s * 2);
+    } else {
+      X.beginPath(); X.moveTo(0, -s); X.lineTo(s, s); X.lineTo(-s, s); X.closePath(); X.fill();
+    }
+    X.restore();
+  }
+}
+
+// ---------- SCREEN SHAKE ----------
+function triggerShake(intensity, duration) {
+  shakeDur = duration;
+  shakeX = (Math.random() - 0.5) * intensity;
+  shakeY = (Math.random() - 0.5) * intensity;
+}
+function updateShake(dt) {
+  if (shakeDur > 0) {
+    shakeDur -= dt;
+    let int = shakeDur * 15;
+    shakeX = (Math.random() - 0.5) * int;
+    shakeY = (Math.random() - 0.5) * int;
+  } else {
+    shakeX = 0; shakeY = 0;
+  }
+}
+
+// ---------- MEMPHIS BG DECORATIONS ----------
+let bgDecos = [];
+function genBgDecos() {
+  bgDecos = [];
+  const colors = [MEMPHIS.pink, MEMPHIS.yellow, MEMPHIS.cyan, MEMPHIS.purple, MEMPHIS.orange];
+  for (let i = 0; i < 30; i++) {
+    bgDecos.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      type: ['dot', 'cross', 'zigzag', 'circle', 'line'][Math.floor(Math.random() * 5)],
+      size: 3 + Math.random() * 8,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      rot: Math.random() * PI2,
+      alpha: 0.08 + Math.random() * 0.12,
+    });
+  }
+}
+genBgDecos();
+window.addEventListener('resize', genBgDecos);
+
+function drawBgDecos() {
+  for (let d of bgDecos) {
+    X.save();
+    X.globalAlpha = d.alpha;
+    X.translate(d.x, d.y);
+    X.rotate(d.rot);
+    X.strokeStyle = d.color;
+    X.fillStyle = d.color;
+    X.lineWidth = 1.5;
+    let s = d.size;
+    if (d.type === 'dot') {
+      X.beginPath(); X.arc(0, 0, s, 0, PI2); X.fill();
+    } else if (d.type === 'cross') {
+      X.beginPath(); X.moveTo(-s, 0); X.lineTo(s, 0); X.moveTo(0, -s); X.lineTo(0, s); X.stroke();
+    } else if (d.type === 'zigzag') {
+      X.beginPath();
+      for (let j = 0; j < 4; j++) {
+        X.lineTo(j * s, (j % 2 === 0 ? -1 : 1) * s);
+      }
+      X.stroke();
+    } else if (d.type === 'circle') {
+      X.beginPath(); X.arc(0, 0, s, 0, PI2); X.stroke();
+    } else {
+      X.beginPath(); X.moveTo(-s * 2, 0); X.lineTo(s * 2, 0); X.stroke();
+      X.setLineDash([3, 3]); X.stroke(); X.setLineDash([]);
+    }
+    X.restore();
+  }
+}
+
+// ---------- PLAYER ----------
+let player = null;
+function initPlayer() {
+  player = {
+    x: W / 2, y: H / 2,
+    baseSize: 30,
+    scale: 1.0,   // health visual
+    hp: 150,
+    maxHp: 150,
+    speed: 280,
+    atkRadius: 75,
+    atkCooldown: 0,
+    atkActive: 0,
+    hurtFlash: 0,
+    color: MEMPHIS.cyan,
+    crackLines: [],
+    invincible: 0,
+    speedBuff: 0,
+    atkBuff: 0,
+  };
+}
+
+function updatePlayer(dt) {
+  if (!player) return;
+  let dx = 0, dy = 0;
+  if (keys['ArrowLeft'] || keys['KeyA']) dx -= 1;
+  if (keys['ArrowRight'] || keys['KeyD']) dx += 1;
+  if (keys['ArrowUp'] || keys['KeyW']) dy -= 1;
+  if (keys['ArrowDown'] || keys['KeyS']) dy += 1;
+  if (isMobile) { dx += touchMoveVec.x; dy += touchMoveVec.y; }
+  let len = Math.sqrt(dx * dx + dy * dy);
+  if (len > 0) { dx /= len; dy /= len; }
+
+  let spd = player.speed * (1 + Math.min(player.speedBuff, 1.5) * 0.25);
+  player.x += dx * spd * dt;
+  player.y += dy * spd * dt;
+
+  // bounds
+  let hs = player.baseSize * player.scale;
+  player.x = Math.max(hs, Math.min(W - hs, player.x));
+  player.y = Math.max(hs, Math.min(H - hs, player.y));
+
+  // buffs decay
+  if (player.speedBuff > 0) player.speedBuff -= dt * 0.25;
+  if (player.atkBuff > 0) player.atkBuff -= dt * 0.15;
+  player.speedBuff = Math.max(0, player.speedBuff);
+  player.atkBuff = Math.max(0, player.atkBuff);
+
+  // invincibility
+  if (player.invincible > 0) player.invincible -= dt;
+
+  // hurt flash
+  if (player.hurtFlash > 0) player.hurtFlash -= dt;
+
+  // scale from HP
+  player.scale = 0.4 + 0.6 * (player.hp / player.maxHp);
+
+  // Body-collision: moving into an egg smashes it (冲撞)
+  let bodyR = player.baseSize * player.scale;
+  for (let i = eggs.length - 1; i >= 0; i--) {
+    let e = eggs[i];
+    let ex = player.x - e.x, ey = player.y - e.y;
+    if (Math.sqrt(ex * ex + ey * ey) < bodyR + e.radius * 0.6) {
+      smashEgg(i);
+    }
+  }
+}
+
+function drawPlayer() {
+  if (!player) return;
+  let s = player.baseSize * player.scale;
+
+  X.save();
+  X.translate(player.x, player.y);
+
+  // Body
+  let col = player.hurtFlash > 0 ? MEMPHIS.red : player.color;
+  // Invincibility blink
+  if (player.invincible > 0 && Math.floor(player.invincible * 10) % 2 === 0) {
+    X.globalAlpha = 0.4;
+  }
+  X.fillStyle = col;
+  X.fillRect(-s, -s, s * 2, s * 2);
+
+  // Memphis inner pattern
+  X.strokeStyle = MEMPHIS.bg;
+  X.lineWidth = 2;
+  X.setLineDash([4, 4]);
+  X.strokeRect(-s * 0.6, -s * 0.6, s * 1.2, s * 1.2);
+  X.setLineDash([]);
+
+  // Crack lines when hurt (deterministic from crackLines array)
+  if (player.hp < player.maxHp * 0.7) {
+    X.strokeStyle = MEMPHIS.bg;
+    X.lineWidth = 2;
+    let cracks = Math.floor((1 - player.hp / player.maxHp) * 6);
+    // Ensure we have enough crack lines
+    while (player.crackLines.length < cracks) {
+      player.crackLines.push({
+        x1: (Math.random() - 0.5) * 1.5,
+        y1: (Math.random() - 0.5) * 1.5,
+        x2: (Math.random() - 0.5) * 1.0,
+        y2: (Math.random() - 0.5) * 1.0,
+      });
+    }
+    for (let i = 0; i < cracks; i++) {
+      let c = player.crackLines[i];
+      X.beginPath();
+      X.moveTo(c.x1 * s, c.y1 * s);
+      X.lineTo((c.x1 + c.x2) * s, (c.y1 + c.y2) * s);
+      X.stroke();
+    }
+  }
+
+  X.restore();
+}
+
+function hurtPlayer(dmg) {
+  playSound(sfxHit)
+  if (!player || player.invincible > 0) return;
+  player.hp -= dmg;
+  player.hurtFlash = 0.2;
+  player.invincible = 0.5;
+  stats.hits++;
+  stats.lastActionTime = gameTime;
+  triggerShake(8, 0.2);
+  spawnParticles(player.x, player.y, MEMPHIS.red, 8, 3);
+  if (player.hp <= 0) {
+    player.hp = 0;
+    endGame();
+  }
+}
+
+// ---------- EGGS ----------
+let eggs = [];
+let eggSpawnTimer = 0;
+let eggSpawnInterval = 2.0;
+
+function spawnEgg(x, y, nested) {
+  let margin = 80;
+  eggs.push({
+    x: x || (margin + Math.random() * (W - margin * 2)),
+    y: y || (margin + Math.random() * (H - margin * 2)),
+    radius: 8,
+    maxRadius: 28 + Math.random() * 12,
+    growthRate: 3 + Math.random() * 2,
+    stage: 0, // 0 small, 1 med, 2 large/hatch
+    hatchTimer: 0,
+    flash: 0,
+    nested: nested || false,
+    spawnAnim: 1.0, // pop-in animation timer
+  });
+}
+
+function updateEggs(dt) {
+  eggSpawnTimer -= dt;
+  // Spawn rate increases
+  eggSpawnInterval = Math.max(0.5, 2.0 - gameTime * 0.015);
+  if (eggSpawnTimer <= 0) {
+    eggSpawnTimer = eggSpawnInterval;
+    let isNested = gameTime > 50 && Math.random() < 0.3;
+    spawnEgg(null, null, isNested);
+  }
+
+  for (let i = eggs.length - 1; i >= 0; i--) {
+    let e = eggs[i];
+    // Spawn pop-in animation
+    if (e.spawnAnim > 0) e.spawnAnim -= dt * 4;
+
+    // Grow immediately
+    e.radius += e.growthRate * dt;
+    let ratio = e.radius / e.maxRadius;
+    if (ratio < 0.5) e.stage = 0;
+    else if (ratio < 0.85) e.stage = 1;
+    else e.stage = 2;
+
+    if (e.stage === 2) {
+      e.flash += dt;
+    }
+
+    // Hatch
+    if (e.radius >= e.maxRadius) {
+      hatchEgg(i);
+    }
+  }
+}
+
+function hatchEgg(idx) {
+  let e = eggs[idx];
+  spawnParticles(e.x, e.y, MEMPHIS.red, 12, 4);
+  triggerShake(4, 0.15);
+  // Spawn enemies
+  let count = 1 + Math.floor(Math.random() * 2);
+  for (let j = 0; j < count; j++) {
+    spawnEnemy(e.x + (Math.random() - 0.5) * 20, e.y);
+  }
+  eggs.splice(idx, 1);
+}
+
+function smashEgg(idx) {
+  playSound(sfxSmash)
+  let e = eggs[idx];
+  stats.kills++;
+  stats.lastActionTime = gameTime;
+  let colors = [MEMPHIS.yellow, MEMPHIS.green, MEMPHIS.cyan, MEMPHIS.orange, MEMPHIS.pink];
+  spawnParticles(e.x, e.y, colors[Math.floor(Math.random() * colors.length)], 15, 5);
+  triggerShake(3, 0.1);
+
+  if (e.nested) {
+    // Spawn 3 smaller eggs
+    for (let j = 0; j < 3; j++) {
+      let ne = {
+        x: e.x + (Math.random() - 0.5) * 60,
+        y: e.y + (Math.random() - 0.5) * 40,
+        radius: 6,
+        maxRadius: 20,
+        growthRate: 4,
+        stage: 0,
+        hatchTimer: 0,
+        flash: 0,
+        nested: false,
+        spawnAnim: 1.0,
+      };
+      eggs.push(ne);
+    }
+  } else {
+    // Drop buff triangles
+    let dropCount = 1 + Math.floor(Math.random() * 3);
+    for (let j = 0; j < dropCount; j++) {
+      spawnBuff(e.x + (Math.random() - 0.5) * 30, e.y + (Math.random() - 0.5) * 20);
+    }
+  }
+  eggs.splice(idx, 1);
+}
+
+function drawEggs() {
+  for (let e of eggs) {
+    X.save();
+    X.translate(e.x, e.y);
+
+    // Pop-in scale animation
+    let popScale = 1;
+    if (e.spawnAnim > 0) {
+      popScale = 1 + e.spawnAnim * 0.8; // starts big, shrinks to 1
+      X.globalAlpha = 1 - e.spawnAnim * 0.5;
+    }
+    X.scale(popScale, popScale);
+
+    // Shake when about to hatch
+    if (e.stage === 2) {
+      let shk = Math.sin(e.flash * 30) * 3;
+      X.translate(shk, 0);
+    }
+
+    // Color by stage
+    let col = MEMPHIS.white;
+    if (e.stage === 1) col = MEMPHIS.yellow;
+    if (e.stage === 2) col = Math.floor(e.flash * 8) % 2 === 0 ? MEMPHIS.red : MEMPHIS.yellow;
+
+    // Nested egg indicator — double ring
+    if (e.nested) {
+      X.strokeStyle = MEMPHIS.purple;
+      X.lineWidth = 2;
+      X.setLineDash([3, 3]);
+      X.beginPath();
+      X.ellipse(0, 0, e.radius + 5, e.radius * 1.2 + 5, 0, 0, PI2);
+      X.stroke();
+      X.setLineDash([]);
+    }
+
+    X.fillStyle = col;
+    X.beginPath();
+    X.ellipse(0, 0, e.radius, e.radius * 1.2, 0, 0, PI2);
+    X.fill();
+
+    // Inner spot
+    X.fillStyle = 'rgba(0,0,0,0.15)';
+    X.beginPath();
+    X.ellipse(-e.radius * 0.2, -e.radius * 0.3, e.radius * 0.25, e.radius * 0.3, 0.3, 0, PI2);
+    X.fill();
+
+    X.restore();
+  }
+}
+
+// ---------- BUFFS (solid triangles) ----------
+let buffs = [];
+function spawnBuff(x, y, forceType) {
+  let types = ['atk', 'speed'];
+  let type = forceType || types[Math.floor(Math.random() * types.length)];
+  let col = type === 'atk' ? MEMPHIS.yellow : type === 'heal' ? MEMPHIS.green : MEMPHIS.blue;
+  buffs.push({
+    x, y, type, color: col,
+    size: 10 + Math.random() * 5,
+    life: 8, // disappear after 8 seconds
+    bob: Math.random() * PI2,
+  });
+}
+let healSpawnTimer = 0;
+
+function updateBuffs(dt) {
+  if (!player) return;
+  // Spawn heal triangles independently on the map
+  healSpawnTimer -= dt;
+  if (healSpawnTimer <= 0) {
+    healSpawnTimer = boss ? 3 + Math.random() * 2 : 6 + Math.random() * 4; // boss时3-5秒，平时6-10秒
+    let margin = 80;
+    spawnBuff(margin + Math.random() * (W - margin * 2), margin + Math.random() * (H - margin * 2), 'heal');
+  }
+  for (let i = buffs.length - 1; i >= 0; i--) {
+    let b = buffs[i];
+    b.life -= dt;
+    b.bob += dt * 3;
+    if (b.life <= 0) { buffs.splice(i, 1); continue; }
+
+    // Pickup
+    let dx = player.x - b.x, dy = player.y - b.y;
+    let dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < player.baseSize * player.scale + b.size) {
+      applyBuff(b);
+      spawnParticles(b.x, b.y, b.color, 8, 3);
+      buffs.splice(i, 1);
+    }
+  }
+}
+
+function applyBuff(b) {
+  playSound(sfxBuff)
+  stats.buffs++;
+  if (b.type === 'atk') {
+    player.atkBuff += 1;
+    player.atkRadius = Math.min(120, player.atkRadius + 5);
+  } else if (b.type === 'heal') {
+    player.hp = Math.min(player.maxHp, player.hp + 30);
+  } else if (b.type === 'speed') {
+    player.speedBuff = Math.min(player.speedBuff + 1, 2);
+  }
+}
+
+function drawBuffs() {
+  for (let b of buffs) {
+    X.save();
+    X.translate(b.x, b.y + Math.sin(b.bob) * 4);
+    X.globalAlpha = b.life < 2 ? b.life / 2 : 1;
+    X.fillStyle = b.color;
+    let s = b.size;
+    X.beginPath();
+    X.moveTo(0, -s);
+    X.lineTo(s, s);
+    X.lineTo(-s, s);
+    X.closePath();
+    X.fill();
+    X.restore();
+  }
+}
+
+// ---------- ENEMIES (hollow red triangles) ----------
+let enemies = [];
+function spawnEnemy(x, y) {
+  enemies.push({
+    x, y,
+    size: 14 + Math.random() * 6,
+    speed: 50 + Math.random() * 40,
+    rot: 0,
+    hp: 1,
+  });
+}
+
+function updateEnemies(dt) {
+  if (!player) return;
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    let e = enemies[i];
+    let dx = player.x - e.x, dy = player.y - e.y;
+    let dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > 1) {
+      e.x += (dx / dist) * e.speed * dt;
+      e.y += (dy / dist) * e.speed * dt;
+    }
+    e.rot += dt * 2;
+
+    // Collision with player
+    let hitDist = player.baseSize * player.scale + e.size * 0.7;
+    if (dist < hitDist) {
+      hurtPlayer(boss ? Math.ceil(8 * 1.1) : 8);
+      spawnParticles(e.x, e.y, MEMPHIS.red, 6, 3);
+      enemies.splice(i, 1);
+    }
+  }
+}
+
+function drawEnemies() {
+  for (let e of enemies) {
+    X.save();
+    X.translate(e.x, e.y);
+    X.rotate(e.rot);
+    X.strokeStyle = MEMPHIS.red;
+    X.lineWidth = 3;
+    let s = e.size;
+    X.beginPath();
+    X.moveTo(0, -s);
+    X.lineTo(s, s);
+    X.lineTo(-s, s);
+    X.closePath();
+    X.stroke();
+    X.restore();
+  }
+}
+
+// ---------- BOSS ----------
+let boss = null;
+let bossSpawned = false;
+
+function spawnBoss() {
+playSound(sfxBoss)
+  if (bossSpawned) return;
+  bossSpawned = true;
+  boss = {
+    x: W / 2,
+    y: -80,
+    radius: 70,
+    hp: 46,
+    maxHp: 46,
+    speed: 50,
+    flash: 0,
+    entering: true,
+    targetY: H * 0.35,
+    hitCooldown: 0, // cooldown between body-collision hits
+  };
+  triggerShake(15, 0.5);
+}
+
+function updateBoss(dt) {
+  if (!boss || !player) return;
+  boss.flash += dt;
+
+  if (boss.entering) {
+    boss.y += 60 * dt;
+    if (boss.y >= boss.targetY) {
+      boss.entering = false;
+    }
+    return;
+  }
+
+  // Move toward player slowly
+  let dx = player.x - boss.x, dy = player.y - boss.y;
+  let dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist > 1) {
+    boss.x += (dx / dist) * boss.speed * dt;
+    boss.y += (dy / dist) * boss.speed * dt;
+  }
+
+  // Collision — player body-slams boss to damage it
+  boss.hitCooldown -= dt;
+  let hitDist = player.baseSize * player.scale + boss.radius;
+  if (dist < hitDist && boss.hitCooldown <= 0) {
+    boss.hitCooldown = 0.6;
+    hitBoss();
+    // Knockback player away from boss
+    if (dist > 1) {
+      player.x -= (dx / dist) * 40;
+      player.y -= (dy / dist) * 40;
+    }
+  }
+
+  // Spawn minions periodically
+  if (Math.random() < dt * 0.6) {
+    let angle = Math.random() * PI2;
+    spawnEnemy(boss.x + Math.cos(angle) * boss.radius, boss.y + Math.sin(angle) * boss.radius);
+  }
+}
+
+function hitBoss() {
+  if (!boss) return;
+  boss.hp--;
+  boss.flash = 0;
+  spawnParticles(boss.x, boss.y, MEMPHIS.green, 10, 5);
+  triggerShake(6, 0.15);
+  if (boss.hp <= 0) {
+    // Boss defeated
+    spawnParticles(boss.x, boss.y, MEMPHIS.green, 40, 8);
+    spawnParticles(boss.x, boss.y, MEMPHIS.yellow, 30, 6);
+    triggerShake(20, 0.6);
+    stats.bossKilled = true;
+    boss = null;
+    endGame();
+  }
+}
+
+function drawBoss() {
+  if (!boss) return;
+  X.save();
+  X.translate(boss.x, boss.y);
+
+  // Shake
+  let shk = Math.sin(boss.flash * 15) * 2;
+  X.translate(shk, 0);
+
+  // Outer glow
+  let grad = X.createRadialGradient(0, 0, boss.radius * 0.5, 0, 0, boss.radius * 1.3);
+  grad.addColorStop(0, 'rgba(81,232,152,0.3)');
+  grad.addColorStop(1, 'rgba(81,232,152,0)');
+  X.fillStyle = grad;
+  X.beginPath();
+  X.arc(0, 0, boss.radius * 1.3, 0, PI2);
+  X.fill();
+
+  // Body
+  X.fillStyle = MEMPHIS.green;
+  X.beginPath();
+  X.arc(0, 0, boss.radius, 0, PI2);
+  X.fill();
+
+  // Inner pattern
+  X.strokeStyle = MEMPHIS.bg;
+  X.lineWidth = 3;
+  X.setLineDash([6, 6]);
+  X.beginPath();
+  X.arc(0, 0, boss.radius * 0.6, 0, PI2);
+  X.stroke();
+  X.setLineDash([]);
+
+  // HP bar
+  X.fillStyle = MEMPHIS.bg;
+  X.fillRect(-boss.radius, -boss.radius - 18, boss.radius * 2, 8);
+  X.fillStyle = MEMPHIS.red;
+  X.fillRect(-boss.radius, -boss.radius - 18, boss.radius * 2 * (boss.hp / boss.maxHp), 8);
+
+  X.restore();
+}
+
+// ---------- HUD (minimal, no text in gameplay) ----------
+function drawHUD() {
+  if (!player) return;
+  // HP bar top-left, purely geometric
+  let bw = 120, bh = 8;
+  let bx = 20, by = 20;
+  X.fillStyle = 'rgba(255,255,255,0.1)';
+  X.fillRect(bx, by, bw, bh);
+  let hpRatio = player.hp / player.maxHp;
+  X.fillStyle = hpRatio > 0.5 ? MEMPHIS.green : hpRatio > 0.25 ? MEMPHIS.yellow : MEMPHIS.red;
+  X.fillRect(bx, by, bw * hpRatio, bh);
+
+  // Kill count — small dots
+  let dotX = 20, dotY = 38;
+  let dots = Math.min(stats.kills, 50);
+  for (let i = 0; i < dots; i++) {
+    X.fillStyle = MEMPHIS.white;
+    X.globalAlpha = 0.5;
+    X.fillRect(dotX + (i % 25) * 6, dotY + Math.floor(i / 25) * 8, 4, 4);
+  }
+  X.globalAlpha = 1;
+
+  // Boss fight border pulse
+  if (boss) {
+    X.save();
+    let pulse = Math.sin(gameTime * 4) * 0.1 + 0.15;
+    X.strokeStyle = MEMPHIS.green;
+    X.globalAlpha = pulse;
+    X.lineWidth = 4;
+    X.setLineDash([12, 8]);
+    X.strokeRect(8, 8, W - 16, H - 16);
+    X.setLineDash([]);
+    X.restore();
+  }
+
+  // Active buff indicators — bottom-left geometric icons
+  let buffY = H - 30;
+  let buffIX = 20;
+  if (player.atkBuff > 0) {
+    X.fillStyle = MEMPHIS.yellow;
+    X.globalAlpha = 0.6 + Math.sin(gameTime * 5) * 0.3;
+    X.beginPath(); X.moveTo(buffIX, buffY - 8); X.lineTo(buffIX + 8, buffY + 4); X.lineTo(buffIX - 8, buffY + 4); X.closePath(); X.fill();
+    buffIX += 24;
+  }
+  if (player.speedBuff > 0) {
+    X.fillStyle = MEMPHIS.blue;
+    X.globalAlpha = 0.6 + Math.sin(gameTime * 5) * 0.3;
+    X.beginPath(); X.moveTo(buffIX, buffY - 8); X.lineTo(buffIX + 8, buffY + 4); X.lineTo(buffIX - 8, buffY + 4); X.closePath(); X.fill();
+    buffIX += 24;
+  }
+  X.globalAlpha = 1;
+}
+
+// ---------- INTRO SEQUENCE ----------
+let introEggs = [];
+let introBossEgg = null;
+let introPhase = 0; // 0=eggs bouncing, 1=boss reveal, 2=shatter, 3=transition
+let introElapsed = 0;
+let introShake = 0;
+
+function initIntro() {
+  introEggs = [];
+  introPhase = 0;
+  introElapsed = 0;
+  introBossEgg = null;
+  // Create 8 eggs
+  for (let i = 0; i < 8; i++) {
+    introEggs.push({
+      x: -60,
+      targetX: W * 0.15 + i * (W * 0.09),
+      y: H * 0.5,
+      baseY: H * 0.5,
+      radius: 20 + Math.random() * 8,
+      delay: i * 0.25,
+      bouncePhase: 0,
+      arrived: false,
+      color: MEMPHIS.white,
+      scale: 1,
+    });
+  }
+}
+
+function updateIntro(dt) {
+  introElapsed += dt;
+
+  if (introPhase === 0) {
+    // Eggs bounce in
+    let allArrived = true;
+    for (let e of introEggs) {
+      let t = introElapsed - e.delay;
+      if (t < 0) { allArrived = false; continue; }
+      if (!e.arrived) {
+        let prog = Math.min(t / 0.6, 1);
+        prog = 1 - Math.pow(1 - prog, 3); // ease out
+        e.x = -60 + (e.targetX + 60) * prog;
+        if (prog >= 1) e.arrived = true;
+        else allArrived = false;
+      }
+      // Bounce animation
+      e.bouncePhase += dt * 5;
+      e.y = e.baseY + Math.abs(Math.sin(e.bouncePhase)) * -30;
+    }
+    if (allArrived && introElapsed > introEggs.length * 0.25 + 1.5) {
+      introPhase = 1;
+      introElapsed = 0;
+      // Transform last egg to boss
+      let last = introEggs[introEggs.length - 1];
+      introBossEgg = {
+        x: last.x, y: last.baseY,
+        radius: last.radius,
+        targetRadius: 80,
+        color: MEMPHIS.green,
+        shake: 0,
+      };
+    }
+  }
+
+  if (introPhase === 1) {
+    // Boss egg grows and shakes
+    introBossEgg.radius += (introBossEgg.targetRadius - introBossEgg.radius) * dt * 3;
+    introBossEgg.shake += dt;
+    introEggs[introEggs.length - 1].color = MEMPHIS.green;
+    introEggs[introEggs.length - 1].radius = introBossEgg.radius;
+    if (introElapsed > 2.0) {
+      introPhase = 2;
+      introElapsed = 0;
+      spawnParticles(introBossEgg.x, introBossEgg.y, MEMPHIS.green, 50, 8);
+      spawnParticles(introBossEgg.x, introBossEgg.y, MEMPHIS.yellow, 30, 6);
+      spawnParticles(introBossEgg.x, introBossEgg.y, MEMPHIS.white, 20, 4);
+      triggerShake(20, 0.6);
+    }
+  }
+
+  if (introPhase === 2) {
+    // Shatter — wait then transition
+    if (introElapsed > 1.2) {
+      introPhase = 3;
+      introElapsed = 0;
+    }
+  }
+
+  if (introPhase === 3) {
+    // Fade transition
+    if (introElapsed > 0.8) {
+      startGame();
+    }
+  }
+}
+
+function drawIntro() {
+  // Background
+  X.fillStyle = MEMPHIS.bg;
+  X.fillRect(0, 0, W, H);
+  drawBgDecos();
+
+  // Title hint — geometric arrangement at top
+  let titleY = H * 0.2;
+  X.save();
+  X.globalAlpha = 0.6;
+  // Decorative shapes as "title"
+  let shapes = [
+    { type: 'circle', x: W * 0.35, color: MEMPHIS.white, s: 12 },
+    { type: 'circle', x: W * 0.42, color: MEMPHIS.yellow, s: 14 },
+    { type: 'circle', x: W * 0.5, color: MEMPHIS.orange, s: 16 },
+    { type: 'tri', x: W * 0.58, color: MEMPHIS.red, s: 14 },
+    { type: 'rect', x: W * 0.65, color: MEMPHIS.cyan, s: 12 },
+  ];
+  for (let sh of shapes) {
+    X.fillStyle = sh.color;
+    if (sh.type === 'circle') {
+      X.beginPath(); X.arc(sh.x, titleY, sh.s, 0, PI2); X.fill();
+    } else if (sh.type === 'tri') {
+      X.beginPath(); X.moveTo(sh.x, titleY - sh.s); X.lineTo(sh.x + sh.s, titleY + sh.s); X.lineTo(sh.x - sh.s, titleY + sh.s); X.closePath(); X.fill();
+    } else {
+      X.fillRect(sh.x - sh.s, titleY - sh.s, sh.s * 2, sh.s * 2);
+    }
+  }
+  X.restore();
+
+  // Eggs
+  if (introPhase < 2) {
+    for (let i = 0; i < introEggs.length; i++) {
+      let e = introEggs[i];
+      X.save();
+      let sx = 0;
+      if (introPhase === 1 && i === introEggs.length - 1 && introBossEgg) {
+        sx = Math.sin(introBossEgg.shake * 25) * (introBossEgg.shake * 5);
+      }
+      X.translate(e.x + sx, e.y);
+      X.fillStyle = e.color;
+      X.beginPath();
+      X.ellipse(0, 0, e.radius, e.radius * 1.25, 0, 0, PI2);
+      X.fill();
+      // Highlight
+      X.fillStyle = 'rgba(255,255,255,0.2)';
+      X.beginPath();
+      X.ellipse(-e.radius * 0.2, -e.radius * 0.3, e.radius * 0.2, e.radius * 0.3, 0.3, 0, PI2);
+      X.fill();
+      X.restore();
+    }
+  }
+
+  // Transition fade
+  if (introPhase === 3) {
+    X.fillStyle = MEMPHIS.bg;
+    X.globalAlpha = Math.min(introElapsed / 0.8, 1);
+    X.fillRect(0, 0, W, H);
+    X.globalAlpha = 1;
+  }
+
+  // Prompt to start — pulsing shapes
+  if (introPhase === 0) {
+    let pulse = 0.5 + Math.sin(introElapsed * 3) * 0.3;
+    X.globalAlpha = pulse;
+    X.fillStyle = MEMPHIS.white;
+    X.font = '16px monospace';
+    X.textAlign = 'center';
+    X.fillText('[ SPACE / TAP ]', W / 2, H * 0.78);
+    X.globalAlpha = 1;
+  }
+
+  drawParticles();
+}
+
+// Skip intro
+function skipIntro() {
+  if (introPhase < 1) {
+    introPhase = 1;
+    introElapsed = 0;
+    for (let e of introEggs) { e.x = e.targetX; e.arrived = true; }
+    let last = introEggs[introEggs.length - 1];
+    introBossEgg = { x: last.x, y: last.baseY, radius: last.radius, targetRadius: 80, color: MEMPHIS.green, shake: 0 };
+  } else if (introPhase < 3) {
+    introPhase = 2;
+    introElapsed = 10;
+  }
+}
+
+window.addEventListener('keydown', e => {
+  if (state === 'intro' && e.code === 'Space') skipIntro();
+  if (state === 'ending' && e.code === 'Space') restartGame();
+});
+window.addEventListener('touchstart', e => {
+  if (state === 'intro' && !joyActive) skipIntro();
+  if (state === 'ending') restartGame();
+});
+
+// ---------- GAME START ----------
+function startGame() {
+  state = 'playing';
+  gameTime = 0;
+  eggs = [];
+  enemies = [];
+  buffs = [];
+  particles = [];
+  boss = null;
+  bossSpawned = false;
+  stats = { kills: 0, hits: 0, buffs: 0, survived: 0, bossKilled: false, lastActionTime: 0 };
+  initPlayer();
+  eggSpawnTimer = 1;
+  healSpawnTimer = 5;
+}
+
+// ---------- ENDING ----------
+let endingData = null;
+let eggEndTimer = 0;   // 结局后计时
+let showEggLogo = false; // 是否显示 egg 动画
+let creditsTimer = 0;  // 滚动字幕计时器
+
+function endGame() {
+  state = 'ending';
+  stats.survived = gameTime;
+  // Determine ending — 坏蛋 is lowest priority fallback
+  let title, subtitle, color;
+  let idleTime = stats.survived - stats.lastActionTime;
+
+  if (stats.bossKilled && stats.kills >= 50) {
+    // Best ending: smashed 50+ eggs AND killed the boss
+    title = '王八蛋';
+    subtitle = 'THE ULTIMATE BASTARD';
+    color = MEMPHIS.green;
+  } else if (idleTime >= 30) {
+    // Hidden ending: 30s+ no kills and no hits — lazy
+    title = '懒蛋';
+    subtitle = 'LAZY EGG';
+    color = MEMPHIS.purple;
+  } else if (stats.survived < 80) {
+    // Survived too short
+    title = '蠢蛋';
+    subtitle = 'STUPID EGG';
+    color = MEMPHIS.orange;
+  } else if (stats.hits > stats.kills && stats.survived > 150) {
+    // Hit more than killed, survived >150s
+    title = '笨蛋';
+    subtitle = 'CLUMSY EGG';
+    color = MEMPHIS.yellow;
+  } else {
+    // Default fallback — 坏蛋 (lowest priority)
+    title = '坏蛋';
+    subtitle = 'BAD EGG';
+    color = MEMPHIS.red;
+  }
+  endingData = { title, subtitle, color, timer: 0 };
+  // Death particles — only for 坏蛋 (screen turns red, rectangle shatters)
+  if (title === '坏蛋') {
+    spawnParticles(player.x, player.y, MEMPHIS.red, 40, 7);
+    spawnParticles(player.x, player.y, MEMPHIS.cyan, 20, 5);
+    triggerShake(25, 0.8);
+  } else if (title === '懒蛋') {
+    // Gentle fade — no explosion
+    spawnParticles(player.x, player.y, MEMPHIS.purple, 15, 2);
+  } else if (player.hp <= 0) {
+    spawnParticles(player.x, player.y, MEMPHIS.red, 20, 5);
+    triggerShake(10, 0.4);
+  }
+eggEndTimer = 5;
+showEggLogo = false;
+creditsTimer = 0;
+}
+
+function drawEnding(dt) {
+// 结局后5秒触发 egg 动画
+if (eggEndTimer > 0) {
+  eggEndTimer -= dt;
+  if (eggEndTimer <= 0) {
+    showEggLogo = true;
+    creditsTimer = 0;
+  }
+}
+if (showEggLogo) {
+  creditsTimer += dt;
+}
+  endingData.timer += dt;
+  let t = endingData.timer;
+
+  // Background
+  X.fillStyle = MEMPHIS.bg;
+  X.fillRect(0, 0, W, H);
+  drawBgDecos();
+
+  // Screen tint
+  X.fillStyle = endingData.color;
+  X.globalAlpha = 0.08 + Math.sin(t * 2) * 0.04;
+  X.fillRect(0, 0, W, H);
+  X.globalAlpha = 1;
+
+if (!showEggLogo) {
+
+// Big title
+  let titleAlpha = Math.min(t / 1.5, 1);
+  X.globalAlpha = titleAlpha;
+  X.fillStyle = endingData.color;
+  X.font = `bold ${Math.min(W * 0.15, 120)}px monospace`;
+  X.textAlign = 'center';
+  X.textBaseline = 'middle';
+  X.fillText(endingData.title, W / 2, H * 0.35);
+
+  X.fillStyle = MEMPHIS.white;
+  X.font = `bold ${Math.min(W * 0.04, 28)}px monospace`;
+  X.fillText(endingData.subtitle, W / 2, H * 0.48);
+
+  // Stats
+if (t > 1.5 && !showEggLogo) {
+    let sAlpha = Math.min((t - 1.5) / 1, 1);
+    X.globalAlpha = sAlpha * 0.7;
+    X.font = `${Math.min(W * 0.025, 16)}px monospace`;
+    X.fillStyle = MEMPHIS.white;
+    let sy = H * 0.58;
+    let gap = 28;
+
+    // Egg icon + count
+    X.fillStyle = MEMPHIS.yellow;
+    X.beginPath(); X.ellipse(W / 2 - 60, sy, 6, 8, 0, 0, PI2); X.fill();
+    X.fillStyle = MEMPHIS.white;
+    X.textAlign = 'left';
+    X.fillText(`× ${stats.kills}`, W / 2 - 48, sy + 5);
+
+    // Hit icon + count
+    X.fillStyle = MEMPHIS.red;
+    X.beginPath(); X.moveTo(W / 2 - 60, sy + gap - 8); X.lineTo(W / 2 - 52, sy + gap + 4); X.lineTo(W / 2 - 68, sy + gap + 4); X.closePath(); X.stroke();
+    X.fillStyle = MEMPHIS.white;
+    X.fillText(`× ${stats.hits}`, W / 2 - 48, sy + gap + 5);
+
+    // Buff icon + count
+    X.fillStyle = MEMPHIS.green;
+    X.beginPath(); X.moveTo(W / 2 - 60, sy + gap * 2 - 8); X.lineTo(W / 2 - 52, sy + gap * 2 + 4); X.lineTo(W / 2 - 68, sy + gap * 2 + 4); X.closePath(); X.fill();
+    X.fillStyle = MEMPHIS.white;
+    X.fillText(`× ${stats.buffs}`, W / 2 - 48, sy + gap * 2 + 5);
+
+    // Time
+    X.fillStyle = MEMPHIS.cyan;
+    X.fillRect(W / 2 - 66, sy + gap * 3 - 4, 12, 12);
+    X.fillStyle = MEMPHIS.white;
+    X.fillText(`${Math.floor(stats.survived)}s`, W / 2 - 48, sy + gap * 3 + 5);
+  }
+
+  // Restart prompt
+  if (t > 3) {
+    let pulse = 0.4 + Math.sin(t * 3) * 0.3;
+    X.globalAlpha = pulse;
+    X.fillStyle = MEMPHIS.white;
+    X.textAlign = 'center';
+    X.font = '14px monospace';
+    X.fillText('[ SPACE / TAP ]', W / 2, H * 0.85);
+  }
+
+  X.globalAlpha = 1;
+  drawParticles();
+} 
+
+// 显示最终 egg 滚动字幕动画
+if (showEggLogo) {
+
+let fadeIn = Math.min(1, creditsTimer * 2);
+  X.save();
+  X.globalAlpha = Math.max(0, fadeIn);
+  X.textAlign = "center";
+  X.textBaseline = "middle";
+
+  // 滚动速度与偏移 — 从屏幕底部往上滚
+  let scrollSpeed = 40; // px per second
+  let scrollY = H + 100 - creditsTimer * scrollSpeed;
+
+  let titleSize = Math.min(W*0.18, 140);
+  let subSize = Math.min(W*0.04, 28);
+  let nameSize = Math.min(W*0.035, 24);
+  let sectionSize = Math.min(W*0.05, 32);
+  let lineGap = 50;
+  let cy = scrollY; // current Y cursor
+
+  // EGG 标题
+  X.fillStyle = MEMPHIS.white;
+  X.font = `bold ${titleSize}px monospace`;
+  let shake = Math.sin(endingData.timer*6)*4;
+  X.fillText("EGG", W/2 + shake, cy);
+  cy += titleSize * 0.6 + lineGap;
+
+  // 队名
+  X.font = `bold ${subSize}px monospace`;
+  X.fillStyle = MEMPHIS.white;
+  X.fillText("每天只想睡觉", W/2, cy);
+  cy += lineGap;
+
+  // 作者
+  X.fillText("作者：闲趣", W/2, cy);
+  cy += lineGap * 2.5; // 空两行
+
+  // 致谢标题
+  X.fillStyle = MEMPHIS.yellow;
+  X.font = `bold ${sectionSize}px monospace`;
+  X.fillText("致 谢", W/2, cy);
+  cy += lineGap * 1.2;
+
+  // 致谢名单
+  let credits = ["青末", "L", "挖掘机", "symbol", "x。", "Mulerun", "ChatGPT", "折竹"];
+  X.font = `${nameSize}px monospace`;
+  X.fillStyle = MEMPHIS.white;
+  for (let name of credits) {
+    X.fillText(name, W/2, cy);
+    cy += lineGap;
+  }
+
+  X.restore();
+}
+
+}
+
+function restartGame() {
+  state = 'intro';
+  particles = [];
+  initIntro();
+}
+
+// ---------- MAIN LOOP ----------
+let lastTime = 0;
+function loop(timestamp) {
+  let dt = (timestamp - lastTime) / 1000;
+  lastTime = timestamp;
+  if (dt > 0.1) dt = 0.1; // cap
+
+  updateShake(dt);
+  updateParticles(dt);
+
+  X.save();
+  X.translate(shakeX, shakeY);
+
+  if (state === 'intro') {
+    updateIntro(dt);
+    drawIntro();
+  } else if (state === 'playing') {
+    gameTime += dt;
+
+    // Boss spawn check
+    if (!bossSpawned && (gameTime > 90 || stats.kills >= 50)) {
+      spawnBoss();
+    }
+
+    // Lazy egg check — 30s no kills and no hits
+    if (gameTime > 30 && (gameTime - stats.lastActionTime) >= 30) {
+      endGame();
+    }
+
+    updatePlayer(dt);
+    updateEggs(dt);
+    updateBuffs(dt);
+    updateEnemies(dt);
+    updateBoss(dt);
+
+    // Draw
+    X.fillStyle = MEMPHIS.bg;
+    X.fillRect(-20, -20, W + 40, H + 40);
+    drawBgDecos();
+    drawEggs();
+    drawBuffs();
+    drawEnemies();
+    drawBoss();
+    drawPlayer();
+    drawParticles();
+    drawHUD();
+  } else if (state === 'ending') {
+    drawEnding(dt);
+  }
+
+  X.restore();
+  requestAnimationFrame(loop);
+}
+
+// ---------- INIT ----------
+initIntro();
+requestAnimationFrame(loop);
+</script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"75124c326cb447fe934cde04713ae013","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"75124c326cb447fe934cde04713ae013","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
