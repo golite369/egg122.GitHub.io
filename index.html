@@ -38,7 +38,12 @@ function playSound(sound){
   s.volume = 0.6
   s.play()
 }
+let audioUnlocked = false
+
 function unlockAudio(){
+
+  if(audioUnlocked) return
+  audioUnlocked = true
 
   bgm.volume = 0.4
   bgm.play().catch(()=>{})
@@ -52,11 +57,16 @@ function unlockAudio(){
 }
 
 // 鼠标点击触发
-window.addEventListener("click", unlockAudio, { once:true })
+window.addEventListener("click", unlockAudio)
 
-// 任意键触发
-window.addEventListener("keydown", unlockAudio, { once:true })
+// 键盘任意键触发
+window.addEventListener("keydown", unlockAudio)
+
+// 手机触摸触发
+window.addEventListener("touchstart", unlockAudio);
+
 let W, H;
+
 function resize() {
   W = C.width = window.innerWidth;
   H = C.height = window.innerHeight;
